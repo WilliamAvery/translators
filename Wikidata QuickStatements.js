@@ -1,16 +1,15 @@
 {
 	"translatorID": "51e5355d-9974-484f-80b9-f84d2b55782e",
+	"translatorType": 2,
 	"label": "Wikidata QuickStatements",
 	"creator": "Philipp Zumstein",
 	"target": "txt",
 	"minVersion": "3.0",
-	"maxVersion": "",
+	"maxVersion": null,
 	"priority": 100,
 	"inRepository": true,
-	"translatorType": 2,
-	"lastUpdated": "2022-12-08 23:00:00"
+	"lastUpdated": "2022-12-12 19:35:00"
 }
-
 
 /*
 	***** BEGIN LICENSE BLOCK *****
@@ -98,6 +97,8 @@ var propertyMapping = {
 
 // properties which needs no quotes around their values (e.g. ones for numbers)
 var nonStringProperties = ["P1104"];
+// properties that should be forced to upper case
+var upperCaseProperties = ["P356"];
 
 // it is important to use here the language codes in the form
 // as they are also used in Wikidata for monolingual text
@@ -152,7 +153,8 @@ var identifierMapping = {
 };
 
 
-function zoteroItemToQuickStatements(item) {
+async function zoteroItemToQuickStatements(item) {
+
 	// add numPages if only page range is given
 	if (item.pages && !item.numPages) {
 		let pagesMatch = item.pages.match(/^(\d+)[–-](\d+)$/);
@@ -167,7 +169,6 @@ function zoteroItemToQuickStatements(item) {
 			delete item.edition;
 		}
 	}
-
 	var statements = ['CREATE'];
 	var addStatement = function () {
 		var args = Array.prototype.slice.call(arguments);
@@ -203,11 +204,15 @@ function zoteroItemToQuickStatements(item) {
 	for (var pnumber in propertyMapping) {
 		var zfield = propertyMapping[pnumber];
 		if (item[zfield]) {
+			var propertyValue = item[zfield]
+			if (upperCaseProperties.includes(pnumber)) {
+				propertyValue = propertyValue.toUpperCase()
+			}
 			if (nonStringProperties.includes(pnumber)) {
-				addStatement(pnumber, item[zfield]);
+				addStatement(pnumber, propertyValue);
 			}
 			else {
-				addStatement(pnumber, '"' + item[zfield] + '"');
+				addStatement(pnumber, '"' + propertyValue + '"');
 			}
 		}
 	}
@@ -291,16 +296,34 @@ function zoteroItemToQuickStatements(item) {
 		}
 	}
 
-	return statements.join('\n') + '\n';
+	for (var ISSN of item.ISSN.split(',')) {
+		answer = await doSparql(encodeURI(`SELECT DISTINCT ?itm WHERE { ?itm p:P236 ?s. ?s (ps:P236) "${ISSN.trim()}".}`))
+		if (answer.results.bindings.length) {
+			addStatement('P1433', answer.results.bindings[0].itm.value.split('entity/')[1])
+			break
+		}
+	}
+	return new Promise((resolve, reject) => {
+		resolve(statements.join('\n') + '\n')
+	})
 }
 
-function doExport() {
+async function doSparql(qry) {
+	return new Promise((resolve, reject) => {
+		ZU.HTTP.doGet("https://query.wikidata.org/sparql?format=json&query=" + qry,
+			function (response) {
+				resolve(JSON.parse(response))
+			})
+	})
+}
+
+async function doExport() {
 	var item;
 	while ((item = Zotero.nextItem())) {
 		// skipping items with a QID saved in extra
 		if (item.extra && item.extra.match(/^QID: /m)) continue;
 
 		// write the statements
-		Zotero.write(zoteroItemToQuickStatements(item));
+		Zotero.write(await zoteroItemToQuickStatements(item));
 	}
 }
